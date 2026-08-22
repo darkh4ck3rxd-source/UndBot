@@ -311,10 +311,13 @@ def parse_and_add_time(text: str, extra_seconds: int = 15) -> Optional[str]:
     minutes = 0
     seconds = 0
     
-    min_match = re.search(r"(\d+)\s*minute", text, re.IGNORECASE)
-    sec_match = re.search(r"(\d+)\s*second", text, re.IGNORECASE)
+    # Match patterns like "40 seconds", "1 minute", "2 minutes 30 seconds"
+    # Also handle "about 40 seconds"
+    min_match = re.search(r"(\d+)\s*min", text, re.IGNORECASE)
+    sec_match = re.search(r"(\d+)\s*sec", text, re.IGNORECASE)
     
     if not min_match and not sec_match:
+        logger.debug("No time pattern found in text: %s", text)
         return None
         
     if min_match:
@@ -408,27 +411,32 @@ async def run_bot2_flow(job_id: str, operator_event: events.NewMessage.Event) ->
                 )
             )
             # Start a listener for the wait time message
+            # Use a more flexible predicate and log all messages received
+            async def wait_time_predicate(message):
+                raw = (message.raw_text or "").lower()
+                logger.debug("BOT2 message received: %s", raw)
+                return "estimated wait time" in raw
+
             wait_time_waiter = asyncio.create_task(
-                wait_for_bot2_message(
-                    lambda message: "Estimated wait time" in (message.raw_text or ""),
-                    timeout=30,
-                )
+                wait_for_bot2_message(wait_time_predicate, timeout=45)
             )
 
+            logger.info("Sending file to BOT2 for job %s", job_id)
             await user_client.send_file(bot2_entity, image_path)
             await store.update(job_id, "sent_to_bot2")
 
             # Try to catch the wait time message
             try:
                 wait_time_message = await wait_time_waiter
-                adjusted_time = parse_and_add_time(wait_time_message.raw_text or "")
+                raw_text = wait_time_message.raw_text or ""
+                logger.info("Caught wait time message: %s", raw_text)
+                adjusted_time = parse_and_add_time(raw_text)
                 if adjusted_time and bot1_app is not None:
-                    await bot1_app.bot.send_message(
-                        job["user_chat_id"],
-                        f"⏱ Estimated wait time: {adjusted_time}"
-                    )
+                    final_msg = f"⏱ Estimated wait time: {adjusted_time}"
+                    logger.info("Sending adjusted wait time to user: %s", final_msg)
+                    await bot1_app.bot.send_message(job["user_chat_id"], final_msg)
             except asyncio.TimeoutError:
-                logger.info("No wait time message received within 30s for job %s", job_id)
+                logger.info("No wait time message received within 45s for job %s", job_id)
             except Exception:
                 logger.exception("Error processing wait time message for job %s", job_id)
 
