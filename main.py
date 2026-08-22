@@ -358,17 +358,28 @@ async def run_bot2_flow(job_id: str, operator_event: events.NewMessage.Event) ->
 
     try:
         await store.update(job_id, "bridge_received")
-        logger.info("Attempting to download media for job %s from message %s", job_id, operator_event.message.id)
+        logger.info("Attempting to download media for job %s from message %s. Chat: %s", job_id, operator_event.message.id, operator_event.chat_id)
+        
         if not operator_event.message.media:
             logger.error("Message %s has no media", operator_event.message.id)
             raise RuntimeError("Message has no media")
+        
+        # Log message details to debug accessibility
+        logger.info("Message media type: %s", type(operator_event.message.media))
         
         downloaded_path = await user_client.download_media(operator_event.message, file=image_path)
         logger.info("Download result for job %s: %s", job_id, downloaded_path)
         
         if not downloaded_path or not os.path.exists(downloaded_path):
-            logger.error("Download failed or file not found for job %s. Path: %s", job_id, downloaded_path)
+            # Try alternative: download from the photo/document directly if possible
+            logger.warning("Standard download failed for job %s, trying alternative...", job_id)
+            downloaded_path = await user_client.download_media(operator_event.message.media, file=image_path)
+            logger.info("Alternative download result for job %s: %s", job_id, downloaded_path)
+
+        if not downloaded_path or not os.path.exists(downloaded_path):
+            logger.error("All download attempts failed for job %s. Path: %s", job_id, downloaded_path)
             raise RuntimeError(f"Image download failed. Path: {downloaded_path}")
+            
         image_path = downloaded_path
 
         if bot1_app is not None:
@@ -506,8 +517,13 @@ def extract_job_id(text: str) -> Optional[str]:
 
 async def operator_message_handler(event) -> None:
     text = event.raw_text or ""
+    logger.info("Received message from operator chat. Text: %s", text[:50])
     job_id = extract_job_id(text)
-    if not job_id or not event.message.media:
+    if not job_id:
+        logger.debug("No job ID found in message")
+        return
+    if not event.message.media:
+        logger.debug("Message for job %s has no media", job_id)
         return
     job = await store.get(job_id)
     if not job or job["status"] != "queued":
