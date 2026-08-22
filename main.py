@@ -233,7 +233,7 @@ async def wait_for_bot2_message(predicate, timeout: int = 60, from_entity=None):
         user_client.remove_event_handler(handler, builder)
 
 
-async def wait_for_two_image_messages(from_entity, timeout: int):
+async def wait_for_image_messages(from_entity, timeout: int, count: int = 1):
     if user_client is None:
         raise RuntimeError("Human Telegram client is not ready")
 
@@ -253,8 +253,9 @@ async def wait_for_two_image_messages(from_entity, timeout: int):
             message = event.message
             if is_image_message(message):
                 messages.append(message)
-                if len(messages) >= 2 and not future.done():
-                    future.set_result(messages[:2])
+                logger.info("Received image %d/%d from %s", len(messages), count, str(from_entity))
+                if len(messages) >= count and not future.done():
+                    future.set_result(messages[:count])
         except Exception as exc:
             if not future.done():
                 future.set_exception(exc)
@@ -449,35 +450,35 @@ async def run_bot2_flow(job_id: str, operator_event: events.NewMessage.Event) ->
             logger.info("Switching to result bot: %s", result_bot_username)
             result_entity = await user_client.get_entity(result_bot_username)
             
-            # 2. Start listening for the image in the result bot
+            # 2. Start listening for the image in the result bot (waiting for 1 image)
             image_waiter = asyncio.create_task(
-                wait_for_two_image_messages(result_entity, BOT2_TIMEOUT_SECONDS)
+                wait_for_image_messages(result_entity, BOT2_TIMEOUT_SECONDS, count=1)
             )
             
-            # 3. Send /start to the result bot (or click button if preferred, but /start is safer)
+            # 3. Send /start to the result bot
             await user_client.send_message(result_entity, "/start")
             await store.update(job_id, "view_result_clicked")
             
-            # 4. Wait for the images (usually one blurred preview and one clear result)
+            # 4. Wait for the clear result image
             result_messages = await image_waiter
-            first_result, second_result = result_messages
+            result_message = result_messages[0]
 
-            # 5. Download and process the clear result (usually the second one)
-            second_result_path_base = os.path.join(temporary_dir, "second-result")
+            # 5. Download and process the clear result
+            result_path_base = os.path.join(temporary_dir, "result-image")
             cropped_result_path = os.path.join(temporary_dir, "processed-result.jpg")
             
             logger.info("Downloading clear result from %s", result_bot_username)
-            downloaded_second_path = await user_client.download_media(second_result, file=second_result_path_base)
+            downloaded_path = await user_client.download_media(result_message, file=result_path_base)
             
-            if not downloaded_second_path or not os.path.exists(downloaded_second_path):
+            if not downloaded_path or not os.path.exists(downloaded_path):
                 logger.warning("Standard download failed for result, trying alternative...")
-                downloaded_second_path = await user_client.download_media(second_result.media, file=second_result_path_base)
+                downloaded_path = await user_client.download_media(result_message.media, file=result_path_base)
 
-            if not downloaded_second_path or not os.path.exists(downloaded_second_path):
+            if not downloaded_path or not os.path.exists(downloaded_path):
                 raise RuntimeError("Clear result image download failed")
                 
-            second_result_path = downloaded_second_path
-            crop_pixels = crop_bottom(second_result_path, cropped_result_path)
+            result_path = downloaded_path
+            crop_pixels = crop_bottom(result_path, cropped_result_path)
             await store.update(job_id, "completed", result_message=ready_text)
 
             if bot1_app is not None:
