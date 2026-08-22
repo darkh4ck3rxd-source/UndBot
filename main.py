@@ -305,6 +305,37 @@ async def click_view_result_button(message):
     raise RuntimeError("BOT2 result-ready message has no View Result button")
 
 
+def parse_and_add_time(text: str, extra_seconds: int = 15) -> Optional[str]:
+    # Match patterns like "40 seconds", "1 minute", "2 minutes 30 seconds"
+    # Simplified: just look for the first occurrence of minutes/seconds
+    minutes = 0
+    seconds = 0
+    
+    min_match = re.search(r"(\d+)\s*minute", text, re.IGNORECASE)
+    sec_match = re.search(r"(\d+)\s*second", text, re.IGNORECASE)
+    
+    if not min_match and not sec_match:
+        return None
+        
+    if min_match:
+        minutes = int(min_match.group(1))
+    if sec_match:
+        seconds = int(sec_match.group(1))
+        
+    total_seconds = minutes * 60 + seconds + extra_seconds
+    
+    new_minutes = total_seconds // 60
+    new_seconds = total_seconds % 60
+    
+    parts = []
+    if new_minutes > 0:
+        parts.append(f"{new_minutes} minute{'s' if new_minutes > 1 else ''}")
+    if new_seconds > 0:
+        parts.append(f"{new_seconds} second{'s' if new_seconds > 1 else ''}")
+        
+    return " ".join(parts) if parts else "a few seconds"
+
+
 def crop_bottom(input_path: str, output_path: str) -> int:
     with Image.open(input_path) as source:
         source = source.convert("RGB")
@@ -365,8 +396,31 @@ async def run_bot2_flow(job_id: str, operator_event: events.NewMessage.Event) ->
                     timeout=BOT2_TIMEOUT_SECONDS,
                 )
             )
+            # Start a listener for the wait time message
+            wait_time_waiter = asyncio.create_task(
+                wait_for_bot2_message(
+                    lambda message: "Estimated wait time" in (message.raw_text or ""),
+                    timeout=30,
+                )
+            )
+
             await user_client.send_file(bot2_entity, image_path)
             await store.update(job_id, "sent_to_bot2")
+
+            # Try to catch the wait time message
+            try:
+                wait_time_message = await wait_time_waiter
+                adjusted_time = parse_and_add_time(wait_time_message.raw_text or "")
+                if adjusted_time and bot1_app is not None:
+                    await bot1_app.bot.send_message(
+                        job["user_chat_id"],
+                        f"⏱ Estimated wait time: {adjusted_time}"
+                    )
+            except asyncio.TimeoutError:
+                logger.info("No wait time message received within 30s for job %s", job_id)
+            except Exception:
+                logger.exception("Error processing wait time message for job %s", job_id)
+
             ready_message = await result_waiter
             ready_text = ready_message.raw_text or RESULT_READY_TEXT
             await store.update(job_id, "result_ready", result_message=ready_text)
