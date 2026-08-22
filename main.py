@@ -33,7 +33,7 @@ logging.basicConfig(
 logger = logging.getLogger("bot1")
 
 BOT1_TOKEN = os.environ["BOT1_TOKEN"]
-BOT1_USERNAME = os.getenv("BOT1_USERNAME", "").lstrip("@").strip()
+BOT1_USERNAME = os.getenv("BOT1_USERNAME", "dark_react3bot").lstrip("@").strip()
 OPERATOR_CHAT_ID = int(os.environ["OPERATOR_CHAT_ID"])
 TELEGRAM_API_ID = int(os.environ["TELEGRAM_API_ID"])
 TELEGRAM_API_HASH = os.environ["TELEGRAM_API_HASH"]
@@ -41,7 +41,7 @@ TELEGRAM_SESSION = os.environ["TELEGRAM_SESSION"]
 BOT2_USERNAME = os.getenv("BOT2_USERNAME", "EasyAI94_Bot").lstrip("@").strip()
 DB_PATH = os.getenv("DB_PATH", "bot1.sqlite3")
 BOT2_TIMEOUT_SECONDS = int(os.getenv("BOT2_TIMEOUT_SECONDS", "900"))
-BOTTOM_CROP_PERCENT = max(0.0, min(float(os.getenv("BOTTOM_CROP_PERCENT", "5")), 50.0))
+BOTTOM_CROP_PERCENT = max(0.0, min(float(os.getenv("BOTTOM_CROP_PERCENT", "10")), 50.0))
 
 MENU_CALLBACK = "request_und_image"
 JOB_PREFIX = "BOT1JOB:"
@@ -49,10 +49,7 @@ RESULT_READY_MARKER = "image result has been sent"
 VIEW_RESULT_BUTTON_TEXT = "view result"
 
 PROCESSING_TEXT = "⏳ Your image has been sent for processing. Please wait."
-RESULT_READY_TEXT = (
-    "🎉 Your image result is ready!\n\n"
-    "The clear result is available in the result bot."
-)
+RESULT_READY_TEXT = "🎉 Your image result is ready!"
 
 
 class JobStore:
@@ -209,7 +206,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def wait_for_bot2_message(predicate, timeout: int = 60, from_entity=None):
-    if user_client is None or bot2_entity is None:
+    if user_client is None:
         raise RuntimeError("Human Telegram client is not ready")
 
     source = from_entity or bot2_entity
@@ -225,12 +222,11 @@ async def wait_for_bot2_message(predicate, timeout: int = 60, from_entity=None):
             if not future.done():
                 future.set_exception(exc)
 
-    builder = events.NewMessage(from_users=source)
-    user_client.add_event_handler(handler, builder)
+    user_client.add_event_handler(handler, events.NewMessage(from_users=source))
     try:
         return await asyncio.wait_for(future, timeout=timeout)
     finally:
-        user_client.remove_event_handler(handler, builder)
+        user_client.remove_event_handler(handler)
 
 
 async def wait_for_image_messages(from_entity, timeout: int, count: int = 1):
@@ -260,68 +256,24 @@ async def wait_for_image_messages(from_entity, timeout: int, count: int = 1):
             if not future.done():
                 future.set_exception(exc)
 
-    builder = events.NewMessage(from_users=from_entity)
-    user_client.add_event_handler(handler, builder)
+    user_client.add_event_handler(handler, events.NewMessage(from_users=from_entity))
     try:
         return await asyncio.wait_for(future, timeout=timeout)
     finally:
-        user_client.remove_event_handler(handler, builder)
-
-
-def _button_text(button) -> str:
-    return str(getattr(button, "text", "") or "").strip().lower()
-
-
-async def click_view_result_button(message):
-    if user_client is None:
-        raise RuntimeError("Human Telegram client is not ready")
-    if not message.buttons:
-        raise RuntimeError("BOT2 result-ready message has no buttons")
-
-    for row_index, row in enumerate(message.buttons):
-        for column_index, button in enumerate(row):
-            if VIEW_RESULT_BUTTON_TEXT not in _button_text(button):
-                continue
-
-            url = getattr(button, "url", None)
-            if url:
-                parsed = urlparse(url)
-                query = parse_qs(parsed.query)
-                if parsed.scheme == "tg":
-                    target = query.get("domain", [None])[0]
-                else:
-                    path_parts = [part for part in parsed.path.split("/") if part]
-                    target = path_parts[0] if path_parts else None
-                if not target:
-                    raise RuntimeError(f"Could not resolve View Result URL: {url}")
-                target_entity = await user_client.get_entity(target)
-                payload = query.get("start", query.get("startapp", [None]))[0]
-                command = "/start"
-                await user_client.send_message(target_entity, command)
-                return target_entity
-
-            await message.click(row_index, column_index)
-            return bot2_entity
-
-    raise RuntimeError("BOT2 result-ready message has no View Result button")
+        user_client.remove_event_handler(handler)
 
 
 def parse_and_add_time(text: str, extra_seconds: int = 5) -> Optional[str]:
-    # Match patterns like "40 seconds", "1 minute", "2 minutes 30 seconds"
     minutes = 0
     seconds = 0
-    
     min_match = re.search(r"(\d+)\s*min", text, re.IGNORECASE)
     sec_match = re.search(r"(\d+)\s*sec", text, re.IGNORECASE)
     
     if not min_match and not sec_match:
-        logger.info("No time pattern found in text: %s", text)
         return None
         
-    if min_match:
-        minutes = int(min_match.group(1))
-    if sec_match:
-        seconds = int(sec_match.group(1))
+    if min_match: minutes = int(min_match.group(1))
+    if sec_match: seconds = int(sec_match.group(1))
         
     total_seconds = minutes * 60 + seconds + extra_seconds
     
@@ -359,19 +311,14 @@ async def run_bot2_flow(job_id: str, operator_event: events.NewMessage.Event) ->
 
     try:
         await store.update(job_id, "bridge_received")
-        logger.info("Attempting to download media for job %s from message %s. Chat: %s", job_id, operator_event.message.id, operator_event.chat_id)
-        
-        if not operator_event.message.media:
-            logger.error("Message %s has no media", operator_event.message.id)
-            raise RuntimeError("Message has no media")
+        logger.info("Downloading media for job %s", job_id)
         
         downloaded_path = await user_client.download_media(operator_event.message, file=image_path)
-        
         if not downloaded_path or not os.path.exists(downloaded_path):
             downloaded_path = await user_client.download_media(operator_event.message.media, file=image_path)
 
         if not downloaded_path or not os.path.exists(downloaded_path):
-            raise RuntimeError(f"Image download failed. Path: {downloaded_path}")
+            raise RuntimeError(f"Image download failed")
             
         image_path = downloaded_path
 
@@ -380,151 +327,124 @@ async def run_bot2_flow(job_id: str, operator_event: events.NewMessage.Event) ->
 
         async with bot2_job_lock:
             logger.info("Starting BOT2 flow for job %s", job_id)
+            
+            # 1. Start listener for wait time
+            async def wait_time_predicate(message):
+                raw = (message.raw_text or "").lower()
+                return "wait time" in raw
+
+            wait_time_waiter = asyncio.create_task(wait_for_bot2_message(wait_time_predicate, timeout=45))
+            
+            # 2. Trigger BOT2 menu
             menu_waiter = asyncio.create_task(
                 wait_for_bot2_message(
-                    lambda message: "Please select the feature you want to use" in (message.raw_text or ""),
-                    timeout=60,
+                    lambda message: "select the feature" in (message.raw_text or "").lower(),
+                    timeout=30,
                 )
             )
             await user_client.send_message(bot2_entity, "/start")
-            menu_message = await menu_waiter
+            try:
+                menu_message = await menu_waiter
+                if menu_message.buttons:
+                    await menu_message.click(0, 0)
+                    await asyncio.sleep(1)
+            except:
+                logger.warning("Menu not received, trying to send file anyway")
 
-            if not menu_message.buttons:
-                raise RuntimeError("BOT2 feature menu did not contain inline buttons")
-            await menu_message.click(0, 0)
-            await asyncio.sleep(0.8)
-
-            result_waiter = asyncio.create_task(
-                wait_for_bot2_message(
-                    lambda message: RESULT_READY_MARKER.lower() in (message.raw_text or "").lower(),
-                    timeout=BOT2_TIMEOUT_SECONDS,
-                )
-            )
-            
-            # Start a listener for the wait time message
-            async def wait_time_predicate(message):
-                raw = (message.raw_text or "").lower()
-                logger.info("BOT2 message received: %s", raw)
-                return "wait time" in raw
-
-            wait_time_waiter = asyncio.create_task(
-                wait_for_bot2_message(wait_time_predicate, timeout=60)
-            )
-
-            logger.info("Sending file to BOT2 for job %s", job_id)
+            # 3. Send file to BOT2
             await user_client.send_file(bot2_entity, image_path)
             await store.update(job_id, "sent_to_bot2")
 
-            # Try to catch the wait time message
+            # 4. Get wait time and calculate sleep
+            sleep_duration = 60 # Default
             try:
                 wait_time_message = await wait_time_waiter
                 raw_text = wait_time_message.raw_text or ""
-                logger.info("Caught wait time message: %s", raw_text)
-                adjusted_time = parse_and_add_time(raw_text, extra_seconds=5)
-                if adjusted_time and bot1_app is not None:
-                    final_msg = f"⏱ Estimated wait time: {adjusted_time}"
-                    logger.info("Sending adjusted wait time to user: %s", final_msg)
-                    await bot1_app.bot.send_message(job["user_chat_id"], final_msg)
-            except asyncio.TimeoutError:
-                logger.info("No wait time message received within 60s for job %s", job_id)
-            except Exception:
-                logger.exception("Error processing wait time message for job %s", job_id)
+                logger.info("Wait time message: %s", raw_text)
+                
+                minutes = 0
+                seconds = 0
+                min_match = re.search(r"(\d+)\s*min", raw_text, re.IGNORECASE)
+                sec_match = re.search(r"(\d+)\s*sec", raw_text, re.IGNORECASE)
+                if min_match: minutes = int(min_match.group(1))
+                if sec_match: seconds = int(sec_match.group(1))
+                
+                actual_wait = minutes * 60 + seconds
+                sleep_duration = actual_wait + 5
+                
+                adjusted_str = parse_and_add_time(raw_text, extra_seconds=5)
+                if bot1_app:
+                    await bot1_app.bot.send_message(job["user_chat_id"], f"⏱ Estimated wait time: {adjusted_str}")
+            except:
+                logger.warning("No wait time message, using default sleep")
+                if bot1_app:
+                    await bot1_app.bot.send_message(job["user_chat_id"], "⏱ Estimated wait time: 1 minute")
 
-            # Wait for "Result Ready" from BOT2
-            ready_message = await result_waiter
-            ready_text = ready_message.raw_text or RESULT_READY_TEXT
-            await store.update(job_id, "result_ready", result_message=ready_text)
+            # 5. Sleep as instructed
+            logger.info("Sleeping for %d seconds before checking result bot", sleep_duration)
+            await asyncio.sleep(sleep_duration)
 
-            # 1. Switch to result bot (@EasyAIResult6_Bot)
+            # 6. Switch to Result Bot
             result_bot_username = "EasyAIResult6_Bot"
-            logger.info("Switching to result bot: %s", result_bot_username)
             result_entity = await user_client.get_entity(result_bot_username)
             
-            # 2. Start listening for the image in the result bot (waiting for 1 image)
-            image_waiter = asyncio.create_task(
-                wait_for_image_messages(result_entity, BOT2_TIMEOUT_SECONDS, count=1)
-            )
+            # Start image listener
+            image_waiter = asyncio.create_task(wait_for_image_messages(result_entity, timeout=180, count=1))
             
-            # 3. Send /start to the result bot to trigger result delivery
+            # Trigger result bot
             await user_client.send_message(result_entity, "/start")
-            await store.update(job_id, "view_result_clicked")
             
-            # 4. Wait for the clear result image
-            result_messages = await image_waiter
-            result_message = result_messages[0]
-
-            # 5. Download and process the clear result
-            result_path_base = os.path.join(temporary_dir, "result-image")
-            cropped_result_path = os.path.join(temporary_dir, "processed-result.jpg")
-            
-            logger.info("Downloading clear result from %s", result_bot_username)
-            downloaded_path = await user_client.download_media(result_message, file=result_path_base)
-            if not downloaded_path or not os.path.exists(downloaded_path):
-                downloaded_path = await user_client.download_media(result_message.media, file=result_path_base)
-
-            if not downloaded_path or not os.path.exists(downloaded_path):
-                raise RuntimeError("Clear result image download failed")
-                
-            result_path = downloaded_path
-            crop_pixels = crop_bottom(result_path, cropped_result_path)
-            await store.update(job_id, "completed", result_message=ready_text)
-
-            # 6. Send to user on BOT1
-            if bot1_app is not None:
-                with open(cropped_result_path, "rb") as photo_file:
-                    await bot1_app.bot.send_photo(
-                        job["user_chat_id"],
-                        photo=photo_file,
-                        caption="🎉 Your image result is ready!",
-                    )
-            
-            # 7. Delete the image from the result bot
+            # 7. Wait for result image
             try:
-                await user_client.delete_messages(result_entity, [result_message.id], revoke=True)
-                logger.info("Deleted result image from %s", result_bot_username)
-            except Exception:
-                logger.exception("Could not delete result image from %s", result_bot_username)
-
-        logger.info("Job %s completed successfully", job_id)
-
-    except asyncio.TimeoutError:
-        error = "Timed out while waiting for BOT2 response"
-        logger.error("%s: %s", job_id, error)
-        await store.update(job_id, "timeout", error=error)
-        if bot1_app is not None:
-            await bot1_app.bot.send_message(
-                job["user_chat_id"],
-                "⚠️ Processing is taking longer than expected. Please try again later.",
-            )
+                result_messages = await image_waiter
+                result_message = result_messages[0]
+                
+                result_path_base = os.path.join(temporary_dir, "result")
+                cropped_result_path = os.path.join(temporary_dir, "cropped.jpg")
+                
+                downloaded_res = await user_client.download_media(result_message, file=result_path_base)
+                if not downloaded_res:
+                    downloaded_res = await user_client.download_media(result_message.media, file=result_path_base)
+                
+                if not downloaded_res:
+                    raise RuntimeError("Result download failed")
+                
+                crop_pixels = crop_bottom(downloaded_res, cropped_result_path)
+                
+                # Send to user
+                if bot1_app:
+                    with open(cropped_result_path, "rb") as f:
+                        await bot1_app.bot.send_photo(job["user_chat_id"], photo=f, caption="🎉 Your image result is ready!")
+                
+                # Delete from result bot
+                try:
+                    await user_client.delete_messages(result_entity, [result_message.id], revoke=True)
+                    logger.info("Deleted result image")
+                except:
+                    pass
+                    
+                await store.update(job_id, "completed")
+                logger.info("Job %s finished", job_id)
+                
+            except asyncio.TimeoutError:
+                raise RuntimeError("Result image not received in result bot")
 
     except Exception as exc:
-        logger.exception("BOT2 flow failed for job %s", job_id)
+        logger.exception("Job %s failed", job_id)
         await store.update(job_id, "failed", error=str(exc))
-        if bot1_app is not None:
-            await bot1_app.bot.send_message(
-                job["user_chat_id"],
-                "❌ Processing could not be completed. Please try again later.",
-            )
+        if bot1_app:
+            await bot1_app.bot.send_message(job["user_chat_id"], "❌ Processing failed. Please try again.")
 
     finally:
         shutil.rmtree(temporary_dir, ignore_errors=True)
 
 
-def extract_job_id(text: str) -> Optional[str]:
-    match = re.search(rf"{re.escape(JOB_PREFIX)}([a-f0-9]+)", text or "", re.IGNORECASE)
-    return match.group(1) if match else None
-
-
 async def operator_message_handler(event) -> None:
     text = event.raw_text or ""
-    logger.info("Received message from operator chat. Text: %s", text[:50])
-    job_id = extract_job_id(text)
-    if not job_id:
-        logger.debug("No job ID found in message")
+    match = re.search(rf"{re.escape(JOB_PREFIX)}([a-f0-9]+)", text, re.IGNORECASE)
+    if not match or not event.message.media:
         return
-    if not event.message.media:
-        logger.debug("Message for job %s has no media", job_id)
-        return
+    job_id = match.group(1)
     job = await store.get(job_id)
     if not job or job["status"] != "queued":
         return
@@ -533,52 +453,29 @@ async def operator_message_handler(event) -> None:
 
 async def main() -> None:
     global user_client, bot1_app, bot2_entity
-
     await store.open()
 
-    user_client = TelegramClient(
-        StringSession(TELEGRAM_SESSION),
-        TELEGRAM_API_ID,
-        TELEGRAM_API_HASH,
-    )
+    user_client = TelegramClient(StringSession(TELEGRAM_SESSION), TELEGRAM_API_ID, TELEGRAM_API_HASH)
     await user_client.start()
-    me = await user_client.get_me()
-    logger.info("Human Telegram bridge connected as %s", getattr(me, "username", None) or me.id)
-
+    logger.info("Human bridge connected")
+    
     bot2_entity = await user_client.get_entity(BOT2_USERNAME)
-    if BOT1_USERNAME:
-        bot1_entity = await user_client.get_entity(BOT1_USERNAME)
-        user_client.add_event_handler(
-            operator_message_handler,
-            events.NewMessage(from_users=bot1_entity),
-        )
-    else:
-        logger.warning("BOT1_USERNAME is empty; operator bridge listener is disabled")
+    user_client.add_event_handler(operator_message_handler, events.NewMessage(from_users=OPERATOR_CHAT_ID))
 
     bot1_app = Application.builder().token(BOT1_TOKEN).build()
     bot1_app.add_handler(CommandHandler("start", start_command))
     bot1_app.add_handler(CallbackQueryHandler(feature_button, pattern=f"^{MENU_CALLBACK}$"))
     bot1_app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
 
-    await bot1_app.initialize()
-    await bot1_app.start()
-    await bot1_app.updater.start_polling(drop_pending_updates=False)
-    logger.info("BOT1 is running")
-
-    stop_event = asyncio.Event()
-    try:
-        await stop_event.wait()
-    finally:
-        if bot1_app.updater:
-            await bot1_app.updater.stop()
-        await bot1_app.stop()
-        await bot1_app.shutdown()
-        await user_client.disconnect()
-        await store.close()
+    async with bot1_app:
+        await bot1_app.initialize()
+        await bot1_app.start()
+        await bot1_app.updater.start_polling()
+        logger.info("BOT1 is running")
+        
+        while True:
+            await asyncio.sleep(3600)
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass
+    asyncio.run(main())
