@@ -436,44 +436,39 @@ async def run_bot2_flow(job_id: str, operator_event: events.NewMessage.Event) ->
             ready_text = ready_message.raw_text or RESULT_READY_TEXT
             await store.update(job_id, "result_ready", result_message=ready_text)
 
-            # Start listening before clicking so fast result messages are not missed.
+            # 1. Resolve the result bot (user specified @EasyAIResult6_Bot)
+            result_bot_username = "EasyAIResult6_Bot"
+            logger.info("Switching to result bot: %s", result_bot_username)
+            result_entity = await user_client.get_entity(result_bot_username)
+            
+            # 2. Start listening for the image in the result bot
             image_waiter = asyncio.create_task(
-                wait_for_two_image_messages(bot2_entity, BOT2_TIMEOUT_SECONDS)
+                wait_for_two_image_messages(result_entity, BOT2_TIMEOUT_SECONDS)
             )
-            result_entity = await click_view_result_button(ready_message)
-
-            # A URL button can open a separate result bot. Move the listener there.
-            if result_entity != bot2_entity:
-                image_waiter.cancel()
-                try:
-                    await image_waiter
-                except asyncio.CancelledError:
-                    pass
-                image_waiter = asyncio.create_task(
-                    wait_for_two_image_messages(result_entity, BOT2_TIMEOUT_SECONDS)
-                )
-
+            
+            # 3. Send /start to the result bot (or click button if preferred, but /start is safer)
+            await user_client.send_message(result_entity, "/start")
             await store.update(job_id, "view_result_clicked")
+            
+            # 4. Wait for the images (usually one blurred preview and one clear result)
             result_messages = await image_waiter
             first_result, second_result = result_messages
 
-            try:
-                await user_client.delete_messages(
-                    result_entity,
-                    [first_result.id],
-                    revoke=True,
-                )
-                logger.info("Deleted first result image for job %s", job_id)
-            except Exception:
-                logger.exception("Could not delete first result image for job %s", job_id)
-
+            # 5. Download and process the clear result (usually the second one)
             second_result_path_base = os.path.join(temporary_dir, "second-result")
             cropped_result_path = os.path.join(temporary_dir, "processed-result.jpg")
-            downloaded_second_path = await second_result.download_media(file=second_result_path_base)
+            
+            logger.info("Downloading clear result from %s", result_bot_username)
+            downloaded_second_path = await user_client.download_media(second_result, file=second_result_path_base)
+            
             if not downloaded_second_path or not os.path.exists(downloaded_second_path):
-                raise RuntimeError("Second BOT2 result image download failed")
-            second_result_path = downloaded_second_path
+                logger.warning("Standard download failed for result, trying alternative...")
+                downloaded_second_path = await user_client.download_media(second_result.media, file=second_result_path_base)
 
+            if not downloaded_second_path or not os.path.exists(downloaded_second_path):
+                raise RuntimeError("Clear result image download failed")
+                
+            second_result_path = downloaded_second_path
             crop_pixels = crop_bottom(second_result_path, cropped_result_path)
             await store.update(job_id, "completed", result_message=ready_text)
 
