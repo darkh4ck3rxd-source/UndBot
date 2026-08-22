@@ -282,6 +282,7 @@ async def run_job_flow(job_id: str, operator_msg) -> None:
 async def on_user_client_message(event):
     global bot2_id
     sid = event.chat_id
+    logger.info("Bridge received message from chat_id: %s, text: %s", sid, (event.raw_text or "")[:50])
     
     if sid == OPERATOR_CHAT_ID:
         text = event.raw_text or ""
