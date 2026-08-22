@@ -45,7 +45,7 @@ BOTTOM_CROP_PERCENT = max(0.0, min(float(os.getenv("BOTTOM_CROP_PERCENT", "5")),
 
 MENU_CALLBACK = "request_und_image"
 JOB_PREFIX = "BOT1JOB:"
-RESULT_READY_MARKER = "Your image result is ready"
+RESULT_READY_MARKER = "image result has been sent"
 VIEW_RESULT_BUTTON_TEXT = "view result"
 
 PROCESSING_TEXT = "⏳ Your image has been sent for processing. Please wait."
