@@ -295,7 +295,7 @@ async def click_view_result_button(message):
                     raise RuntimeError(f"Could not resolve View Result URL: {url}")
                 target_entity = await user_client.get_entity(target)
                 payload = query.get("start", query.get("startapp", [None]))[0]
-                command = f"/start {payload}" if payload else "/start"
+                command = "/start"
                 await user_client.send_message(target_entity, command)
                 return target_entity
 
