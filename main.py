@@ -306,19 +306,16 @@ async def click_view_result_button(message):
     raise RuntimeError("BOT2 result-ready message has no View Result button")
 
 
-def parse_and_add_time(text: str, extra_seconds: int = 15) -> Optional[str]:
+def parse_and_add_time(text: str, extra_seconds: int = 5) -> Optional[str]:
     # Match patterns like "40 seconds", "1 minute", "2 minutes 30 seconds"
-    # Simplified: just look for the first occurrence of minutes/seconds
     minutes = 0
     seconds = 0
     
-    # Match patterns like "40 seconds", "1 minute", "2 minutes 30 seconds"
-    # Also handle "about 40 seconds"
     min_match = re.search(r"(\d+)\s*min", text, re.IGNORECASE)
     sec_match = re.search(r"(\d+)\s*sec", text, re.IGNORECASE)
     
     if not min_match and not sec_match:
-        logger.debug("No time pattern found in text: %s", text)
+        logger.info("No time pattern found in text: %s", text)
         return None
         
     if min_match:
@@ -368,20 +365,12 @@ async def run_bot2_flow(job_id: str, operator_event: events.NewMessage.Event) ->
             logger.error("Message %s has no media", operator_event.message.id)
             raise RuntimeError("Message has no media")
         
-        # Log message details to debug accessibility
-        logger.info("Message media type: %s", type(operator_event.message.media))
-        
         downloaded_path = await user_client.download_media(operator_event.message, file=image_path)
-        logger.info("Download result for job %s: %s", job_id, downloaded_path)
         
         if not downloaded_path or not os.path.exists(downloaded_path):
-            # Try alternative: download from the photo/document directly if possible
-            logger.warning("Standard download failed for job %s, trying alternative...", job_id)
             downloaded_path = await user_client.download_media(operator_event.message.media, file=image_path)
-            logger.info("Alternative download result for job %s: %s", job_id, downloaded_path)
 
         if not downloaded_path or not os.path.exists(downloaded_path):
-            logger.error("All download attempts failed for job %s. Path: %s", job_id, downloaded_path)
             raise RuntimeError(f"Image download failed. Path: {downloaded_path}")
             
         image_path = downloaded_path
@@ -411,15 +400,15 @@ async def run_bot2_flow(job_id: str, operator_event: events.NewMessage.Event) ->
                     timeout=BOT2_TIMEOUT_SECONDS,
                 )
             )
+            
             # Start a listener for the wait time message
-            # Use a more flexible predicate and log all messages received
             async def wait_time_predicate(message):
                 raw = (message.raw_text or "").lower()
-                logger.debug("BOT2 message received: %s", raw)
-                return "estimated wait time" in raw
+                logger.info("BOT2 message received: %s", raw)
+                return "wait time" in raw
 
             wait_time_waiter = asyncio.create_task(
-                wait_for_bot2_message(wait_time_predicate, timeout=45)
+                wait_for_bot2_message(wait_time_predicate, timeout=60)
             )
 
             logger.info("Sending file to BOT2 for job %s", job_id)
@@ -431,21 +420,22 @@ async def run_bot2_flow(job_id: str, operator_event: events.NewMessage.Event) ->
                 wait_time_message = await wait_time_waiter
                 raw_text = wait_time_message.raw_text or ""
                 logger.info("Caught wait time message: %s", raw_text)
-                adjusted_time = parse_and_add_time(raw_text)
+                adjusted_time = parse_and_add_time(raw_text, extra_seconds=5)
                 if adjusted_time and bot1_app is not None:
                     final_msg = f"⏱ Estimated wait time: {adjusted_time}"
                     logger.info("Sending adjusted wait time to user: %s", final_msg)
                     await bot1_app.bot.send_message(job["user_chat_id"], final_msg)
             except asyncio.TimeoutError:
-                logger.info("No wait time message received within 45s for job %s", job_id)
+                logger.info("No wait time message received within 60s for job %s", job_id)
             except Exception:
                 logger.exception("Error processing wait time message for job %s", job_id)
 
+            # Wait for "Result Ready" from BOT2
             ready_message = await result_waiter
             ready_text = ready_message.raw_text or RESULT_READY_TEXT
             await store.update(job_id, "result_ready", result_message=ready_text)
 
-            # 1. Resolve the result bot (user specified @EasyAIResult6_Bot)
+            # 1. Switch to result bot (@EasyAIResult6_Bot)
             result_bot_username = "EasyAIResult6_Bot"
             logger.info("Switching to result bot: %s", result_bot_username)
             result_entity = await user_client.get_entity(result_bot_username)
@@ -455,7 +445,7 @@ async def run_bot2_flow(job_id: str, operator_event: events.NewMessage.Event) ->
                 wait_for_image_messages(result_entity, BOT2_TIMEOUT_SECONDS, count=1)
             )
             
-            # 3. Send /start to the result bot
+            # 3. Send /start to the result bot to trigger result delivery
             await user_client.send_message(result_entity, "/start")
             await store.update(job_id, "view_result_clicked")
             
@@ -469,9 +459,7 @@ async def run_bot2_flow(job_id: str, operator_event: events.NewMessage.Event) ->
             
             logger.info("Downloading clear result from %s", result_bot_username)
             downloaded_path = await user_client.download_media(result_message, file=result_path_base)
-            
             if not downloaded_path or not os.path.exists(downloaded_path):
-                logger.warning("Standard download failed for result, trying alternative...")
                 downloaded_path = await user_client.download_media(result_message.media, file=result_path_base)
 
             if not downloaded_path or not os.path.exists(downloaded_path):
@@ -481,17 +469,23 @@ async def run_bot2_flow(job_id: str, operator_event: events.NewMessage.Event) ->
             crop_pixels = crop_bottom(result_path, cropped_result_path)
             await store.update(job_id, "completed", result_message=ready_text)
 
+            # 6. Send to user on BOT1
             if bot1_app is not None:
-                await bot1_app.bot.send_photo(
-                    job["user_chat_id"],
-                    photo=cropped_result_path,
-                    caption=(
-                        "✅ Your processed image is ready.\n"
-                        f"Bottom crop applied: {crop_pixels}px."
-                    ),
-                )
+                with open(cropped_result_path, "rb") as photo_file:
+                    await bot1_app.bot.send_photo(
+                        job["user_chat_id"],
+                        photo=photo_file,
+                        caption="🎉 Your image result is ready!",
+                    )
+            
+            # 7. Delete the image from the result bot
+            try:
+                await user_client.delete_messages(result_entity, [result_message.id], revoke=True)
+                logger.info("Deleted result image from %s", result_bot_username)
+            except Exception:
+                logger.exception("Could not delete result image from %s", result_bot_username)
 
-        logger.info("BOT2 result processed successfully for job %s", job_id)
+        logger.info("Job %s completed successfully", job_id)
 
     except asyncio.TimeoutError:
         error = "Timed out while waiting for BOT2 response"
@@ -502,6 +496,7 @@ async def run_bot2_flow(job_id: str, operator_event: events.NewMessage.Event) ->
                 job["user_chat_id"],
                 "⚠️ Processing is taking longer than expected. Please try again later.",
             )
+
     except Exception as exc:
         logger.exception("BOT2 flow failed for job %s", job_id)
         await store.update(job_id, "failed", error=str(exc))
@@ -510,6 +505,7 @@ async def run_bot2_flow(job_id: str, operator_event: events.NewMessage.Event) ->
                 job["user_chat_id"],
                 "❌ Processing could not be completed. Please try again later.",
             )
+
     finally:
         shutil.rmtree(temporary_dir, ignore_errors=True)
 
