@@ -327,9 +327,17 @@ async def run_bot2_flow(job_id: str, operator_event: events.NewMessage.Event) ->
 
     try:
         await store.update(job_id, "bridge_received")
-        downloaded_path = await operator_event.message.download_media(file=image_path)
+        logger.info("Attempting to download media for job %s from message %s", job_id, operator_event.message.id)
+        if not operator_event.message.media:
+            logger.error("Message %s has no media", operator_event.message.id)
+            raise RuntimeError("Message has no media")
+        
+        downloaded_path = await user_client.download_media(operator_event.message, file=image_path)
+        logger.info("Download result for job %s: %s", job_id, downloaded_path)
+        
         if not downloaded_path or not os.path.exists(downloaded_path):
-            raise RuntimeError("Image download from operator chat failed")
+            logger.error("Download failed or file not found for job %s. Path: %s", job_id, downloaded_path)
+            raise RuntimeError(f"Image download failed. Path: {downloaded_path}")
         image_path = downloaded_path
 
         if bot1_app is not None:
