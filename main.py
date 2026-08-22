@@ -327,9 +327,10 @@ async def run_bot2_flow(job_id: str, operator_event: events.NewMessage.Event) ->
 
     try:
         await store.update(job_id, "bridge_received")
-        await operator_event.message.download_media(file=image_path)
-        if not os.path.exists(image_path):
+        downloaded_path = await operator_event.message.download_media(file=image_path)
+        if not downloaded_path or not os.path.exists(downloaded_path):
             raise RuntimeError("Image download from operator chat failed")
+        image_path = downloaded_path
 
         if bot1_app is not None:
             await bot1_app.bot.send_message(job["user_chat_id"], PROCESSING_TEXT)
@@ -393,11 +394,12 @@ async def run_bot2_flow(job_id: str, operator_event: events.NewMessage.Event) ->
             except Exception:
                 logger.exception("Could not delete first result image for job %s", job_id)
 
-            second_result_path = os.path.join(temporary_dir, "second-result")
+            second_result_path_base = os.path.join(temporary_dir, "second-result")
             cropped_result_path = os.path.join(temporary_dir, "processed-result.jpg")
-            await second_result.download_media(file=second_result_path)
-            if not os.path.exists(second_result_path):
+            downloaded_second_path = await second_result.download_media(file=second_result_path_base)
+            if not downloaded_second_path or not os.path.exists(downloaded_second_path):
                 raise RuntimeError("Second BOT2 result image download failed")
+            second_result_path = downloaded_second_path
 
             crop_pixels = crop_bottom(second_result_path, cropped_result_path)
             await store.update(job_id, "completed", result_message=ready_text)
