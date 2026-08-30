@@ -41,6 +41,7 @@ TELEGRAM_API_ID = int(os.environ["TELEGRAM_API_ID"])
 TELEGRAM_API_HASH = os.environ["TELEGRAM_API_HASH"]
 TELEGRAM_SESSION = os.environ["TELEGRAM_SESSION"]
 BOT2_USERNAME = os.getenv("BOT2_USERNAME", "EasyAI94_Bot").lstrip("@").strip()
+BOT2_TOKEN = os.getenv("BOT2_TOKEN", "").strip()
 DB_PATH = os.getenv("DB_PATH", "bot1.sqlite3")
 BOTTOM_CROP_PERCENT = 10.0
 
