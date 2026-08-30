@@ -136,6 +136,17 @@ def extract_bot_and_payload(url: str):
         
     return bot, payload
 
+
+def is_user_visible_status(text: str) -> bool:
+    lowered = (text or "").lower()
+    markers = (
+        "image received", "image quota", "remaining:", "creating new account",
+        "login success", "sending image", "queue detected", "processing started",
+        "wait time", "estimated wait", "task(s) ahead"
+    )
+    return any(marker in lowered for marker in markers)
+
+
 # --- Bot Handlers ---
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message:
@@ -210,8 +221,13 @@ async def run_job_flow(job_id: str, operator_msg) -> None:
             start_time = datetime.now()
             while (datetime.now() - start_time).total_seconds() < 900: # 15 min max
                 msg = await asyncio.wait_for(bot2_queue.get(), timeout=300)
-                text = (msg.raw_text or "").lower()
-                
+                raw_text = (msg.raw_text or "").strip()
+                text = raw_text.lower()
+                if raw_text and is_user_visible_status(raw_text) and bot1_app:
+                    try:
+                        await bot1_app.bot.send_message(job["user_chat_id"], raw_text)
+                    except Exception:
+                        logger.exception("Could not forward Bot2 status for job %s", job_id)
                 if "wait time" in text:
                     seconds = parse_wait_time(text)
                     if bot1_app:
@@ -220,7 +236,11 @@ async def run_job_flow(job_id: str, operator_msg) -> None:
                         wait_str = f"{m} minute{'s' if m!=1 else ''} {s} second{'s' if s!=1 else ''}" if m > 0 else f"{s} seconds"
                         await bot1_app.bot.send_message(job["user_chat_id"], f"⏱ Estimated wait time: {wait_str}")
                 
-                if "image result has been sent" in text and msg.buttons:
+                result_markers = (
+                    "image result has been sent", "your image result is ready",
+                    "image result is ready", "result is ready", "watermark removed"
+                )
+                if msg.buttons and any(marker in text for marker in result_markers):
                     # Found the result button!
                     for row in msg.buttons:
                         for btn in row:
