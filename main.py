@@ -303,13 +303,17 @@ async def on_user_client_message(event):
     sid = event.chat_id
     logger.info("Bridge received message from chat_id: %s, text: %s", sid, (event.raw_text or "")[:50])
     
-    if sid == OPERATOR_CHAT_ID:
-        text = event.raw_text or ""
-        match = re.search(rf"{re.escape(JOB_PREFIX)}([a-f0-9]+)", text, re.IGNORECASE)
-        if match and event.message.media:
-            asyncio.create_task(run_job_flow(match.group(1), event.message))
-            
-    elif sid == bot2_id:
+    text = event.raw_text or ""
+    match = re.search(rf"{re.escape(JOB_PREFIX)}([a-f0-9]+)", text, re.IGNORECASE)
+    if match and event.message.media:
+        job_id = match.group(1)
+        job = await store.get(job_id)
+        if job:
+            logger.info("BOT1JOB handoff matched: job=%s chat_id=%s", job_id, sid)
+            asyncio.create_task(run_job_flow(job_id, event.message))
+        return
+
+    if sid == bot2_id:
         await bot2_queue.put(event.message)
         
     elif sid in result_bot_queues:
