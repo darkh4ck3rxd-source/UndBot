@@ -35,7 +35,7 @@ logger = logging.getLogger("bot1")
 
 # --- Configuration ---
 BOT1_TOKEN = os.environ["BOT1_TOKEN"]
-BOT1_USERNAME = os.getenv("BOT1_USERNAME", "Tiwari_geybot").lstrip("@").strip()
+BOT1_USERNAME = os.getenv("BOT1_USERNAME", "legendchatprobot").lstrip("@").strip()
 OPERATOR_CHAT_ID = int(os.environ["OPERATOR_CHAT_ID"])
 TELEGRAM_API_ID = int(os.environ["TELEGRAM_API_ID"])
 TELEGRAM_API_HASH = os.environ["TELEGRAM_API_HASH"]
