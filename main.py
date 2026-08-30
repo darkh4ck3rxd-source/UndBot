@@ -200,16 +200,24 @@ async def run_job_flow(job_id: str, operator_msg) -> None:
             # Clear bot2 queue
             while not bot2_queue.empty(): bot2_queue.get_nowait()
 
-            # 1. Trigger BOT2
-            await user_client.send_message(bot2_id, "/start")
-            
-            # Wait for menu and click
-            try:
-                msg = await asyncio.wait_for(bot2_queue.get(), timeout=15)
-                if msg.buttons: await msg.click(0, 0)
-            except: pass
+            # 1. Trigger BOT2 with the exact start text used by EasyAI94_Bot
+            await user_client.send_message(bot2_id, "😎 Start")
 
-            # 2. Send file to BOT2
+            # Wait specifically for the feature-selection message, then click its first inline button.
+            feature_msg = None
+            feature_deadline = datetime.now().timestamp() + 30
+            while datetime.now().timestamp() < feature_deadline:
+                remaining = max(1, int(feature_deadline - datetime.now().timestamp()))
+                incoming = await asyncio.wait_for(bot2_queue.get(), timeout=remaining)
+                incoming_text = (incoming.raw_text or "").lower()
+                if incoming.buttons and "please select the feature" in incoming_text:
+                    feature_msg = incoming
+                    break
+            if feature_msg is None:
+                raise RuntimeError("Bot2 feature-selection message not received")
+            await feature_msg.click(0, 0)
+
+            # 2. Send the image to Bot2 after the feature is selected
             await user_client.send_file(bot2_id, path)
             
             # 3. Listen for wait time and result ready
@@ -332,7 +340,12 @@ async def main():
 
     user_client = TelegramClient(StringSession(TELEGRAM_SESSION), TELEGRAM_API_ID, TELEGRAM_API_HASH)
     await user_client.start()
-    
+    connected_me = await user_client.get_me()
+    logger.info("Connected user account: id=%s username=%s", connected_me.id, connected_me.username)
+    expected_account_id = int(os.getenv("CONNECTED_ACCOUNT_ID", "6407814155"))
+    if connected_me.id != expected_account_id:
+        raise RuntimeError(f"Wrong connected account: expected {expected_account_id}, got {connected_me.id}")
+
     bot2_entity = await user_client.get_entity(BOT2_USERNAME)
     bot2_id = bot2_entity.id
     
