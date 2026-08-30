@@ -47,7 +47,7 @@ BOTTOM_CROP_PERCENT = 10.0
 
 MENU_CALLBACK = "request_und_image"
 JOB_PREFIX = "BOT1JOB:"
-PROCESSING_TEXT = "⏳ Your image has been sent for processing. Please wait."
+PROCESSING_TEXT = "Image received! Starting processing..."
 
 # --- Database ---
 class JobStore:
@@ -177,7 +177,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             caption=f"{JOB_PREFIX}{job_id}\nUser: {update.effective_user.id}",
         )
         await store.create(job_id, update.effective_user.id, update.effective_user.username)
-        await update.message.reply_text("✅ Image received. Forwarded to operator.")
+        await update.message.reply_text(PROCESSING_TEXT)
     except Exception as e:
         logger.exception("Forward failed")
         await update.message.reply_text("❌ Error forwarding image.")
@@ -195,8 +195,6 @@ async def run_job_flow(job_id: str, operator_msg) -> None:
         logger.info("Processing job %s", job_id)
         path = await user_client.download_media(operator_msg, file=in_img)
         if not path: raise RuntimeError("Download failed")
-
-        if bot1_app: await bot1_app.bot.send_message(job["user_chat_id"], PROCESSING_TEXT)
 
         async with bot2_job_lock:
             # Clear bot2 queue
